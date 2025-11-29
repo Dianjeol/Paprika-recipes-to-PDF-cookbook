@@ -65,7 +65,6 @@ li { margin-bottom: 4px; font-size: 0.9rem; border-bottom: 1px dotted #ddd; padd
 """
 
 # --- HTML TEMPLATES ---
-# Diese Seite enthält jetzt Javascript für den Fortschrittsbalken
 INDEX_HTML = """
 <!doctype html>
 <html>
@@ -89,7 +88,7 @@ INDEX_HTML = """
         .progress-bar-fill { background: linear-gradient(90deg, #e67e22, #f39c12); height: 100%; width: 0%; transition: width 0.4s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.8rem; font-weight: bold; text-shadow: 0 1px 1px rgba(0,0,0,0.2); }
         .status-text { margin-top: 10px; color: #7f8c8d; font-size: 0.9rem; text-align: center; font-weight: 500; }
         
-        /* Spinner for processing phase */
+        /* Spinner */
         .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #bdc3c7; border-top-color: #e67e22; border-radius: 50%; animation: spin 1s infinite linear; margin-right: 8px; vertical-align: middle; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
@@ -128,7 +127,6 @@ INDEX_HTML = """
             const fileInput = document.getElementById('fileInput');
             if(!fileInput.files.length) return;
 
-            // UI Reset
             btn.disabled = true;
             btn.style.opacity = "0.5";
             progressBox.style.display = 'block';
@@ -136,47 +134,34 @@ INDEX_HTML = """
             const formData = new FormData(form);
             const xhr = new XMLHttpRequest();
 
-            // 1. Upload Progress (Real)
             xhr.upload.addEventListener('progress', function(e) {
                 if (e.lengthComputable) {
-                    const percent = Math.round((e.loaded / e.total) * 40); // Upload is 40% of the bar
+                    const percent = Math.round((e.loaded / e.total) * 40);
                     updateBar(percent, "Uploading recipes... " + Math.round((e.loaded/e.total)*100) + "%");
                 }
             });
 
-            // 2. Processing Progress (Simulated)
-            xhr.addEventListener('loadstart', function() {
-                // When upload starts
-            });
-            
-            let simTimer;
-            
             xhr.upload.addEventListener('load', function() {
-                // Upload finished, now server is processing
                 updateBar(45, "Processing images...");
-                
-                // Simulate progress from 45% to 95% over 60 seconds (since we have 120s timeout)
                 let current = 45;
                 simTimer = setInterval(() => {
                     if(current < 70) {
-                        current += 2; // Fast at first (resizing)
+                        current += 2;
                         updateBar(current, "<div class='spinner'></div> Optimizing images...");
                     } else if (current < 90) {
-                        current += 0.5; // Slower for PDF generation
+                        current += 0.5;
                         updateBar(current, "<div class='spinner'></div> Generating PDF pages...");
                     } else if (current < 98) {
-                        current += 0.1; // Very slow at the end
+                        current += 0.1;
                         updateBar(current, "<div class='spinner'></div> Finalizing PDF...");
                     }
                 }, 1000);
             });
 
-            // 3. Completion
             xhr.addEventListener('load', function() {
                 clearInterval(simTimer);
                 if (xhr.status === 200) {
                     updateBar(100, "Done!");
-                    // Replace current page with the result
                     document.write(xhr.responseText);
                 } else {
                     updateBar(100, "Error!");
@@ -192,6 +177,7 @@ INDEX_HTML = """
                 statusText.innerText = "Network Error";
             });
 
+            let simTimer;
             xhr.open('POST', '/', true);
             xhr.send(formData);
         });
@@ -257,9 +243,12 @@ def get_recipe_html(recipe):
     
     return f"""<div class="recipe-card avoid-break" id="{recipe.get('anchor_id', '')}"><h1>{html.escape(recipe['name'])}</h1><div class="meta-info-container"><div class="meta-info">{meta_html}</div></div><table class="layout-table"><tr><td class="sidebar-cell">{img_html}<h3>Ingredients</h3><ul>{ing_html}</ul></td><td class="main-cell"><h3>Directions</h3>{dir_html}{notes_html}</td></tr></table></div>"""
 
-@app.route('/', methods=['GET', 'POST'])
+# --- ROUTE HANDLING ---
+# Wir erlauben GET, POST und HEAD (für UptimeRobot)
+@app.route('/', methods=['GET', 'POST', 'HEAD'])
 def upload_file():
-    if request.method == 'GET':
+    # UptimeRobot sendet oft HEAD requests. Wir behandeln diese wie GET.
+    if request.method == 'GET' or request.method == 'HEAD':
         return INDEX_HTML
 
     if request.method == 'POST':
