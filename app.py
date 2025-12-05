@@ -11,6 +11,7 @@ import io
 import threading
 import shutil
 import time
+from itertools import groupby  # <--- NEU: Für die Gruppierung der Kapitel
 from flask import Flask, request, send_file, jsonify, render_template_string
 from weasyprint import HTML
 from PIL import Image
@@ -45,14 +46,25 @@ CSS_STYLES = """
 }
 body { font-family: 'Merriweather', serif; color: #333; line-height: 1.45; margin: 0; padding: 0; background: #fff; }
 .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+
+/* Cover Page */
 .cover-page { text-align: center; padding: 40px 20px; border: 6px double #2c3e50; height: 85vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background-color: #fdfbf7; box-sizing: border-box; margin-bottom: 0; }
 .cover-subtitle { font-family: 'Lato', sans-serif; text-transform: uppercase; letter-spacing: 3px; font-size: 0.9rem; color: #e67e22; margin-bottom: 15px; }
 .cover-title { font-family: 'Playfair Display', serif; font-size: 3.8rem; line-height: 1.1; color: #2c3e50; margin: 10px 0; font-style: italic; }
 .cover-author { font-family: 'Playfair Display', serif; font-size: 1.3rem; color: #555; margin-top: 30px; font-weight: normal; }
 .cover-author strong { display: block; font-size: 1.8rem; color: #2c3e50; margin-top: 8px; }
 .cover-year { margin-top: auto; font-family: 'Lato', sans-serif; color: #999; font-size: 0.8rem; padding-top: 20px; }
-.chapter-page { display: flex; justify-content: center; align-items: center; height: 85vh; background: #2c3e50; color: #fff; text-align: center; border: 4px solid #e67e22; margin: 20px 0; }
-.chapter-title { font-family: 'Playfair Display', serif; font-size: 4rem; color: #fff; border-bottom: 3px solid #e67e22; padding-bottom: 20px; }
+
+/* Chapter Page Styles */
+.chapter-page { display: flex; flex-direction: column; justify-content: center; align-items: center; height: 85vh; background: #2c3e50; color: #fff; text-align: center; border: 4px solid #e67e22; margin: 20px 0; }
+.chapter-content-wrapper { width: 80%; }
+.chapter-title { font-family: 'Playfair Display', serif; font-size: 4rem; color: #fff; border-bottom: 3px solid #e67e22; padding-bottom: 20px; margin-bottom: 20px; }
+
+/* Chapter Mini TOC */
+.chapter-toc { list-style: none; padding: 0; margin-top: 30px; text-align: center; columns: 2; column-gap: 40px; }
+.chapter-toc-item { font-family: 'Lato', sans-serif; font-size: 1.1rem; margin-bottom: 10px; color: #ecf0f1; break-inside: avoid; page-break-inside: avoid; }
+
+/* Main TOC */
 .toc-container { padding: 20px 0; }
 .toc-title { font-family: 'Playfair Display', serif; font-size: 2.2rem; text-align: center; color: #2c3e50; margin-bottom: 30px; border-bottom: 2px solid #e67e22; display: inline-block; padding-bottom: 8px; width: 100%; }
 .toc-list { column-count: 2; column-gap: 40px; list-style: none; padding: 0; font-family: 'Lato', sans-serif; }
@@ -62,6 +74,8 @@ body { font-family: 'Merriweather', serif; color: #333; line-height: 1.45; margi
 .toc-page { font-family: 'Lato', sans-serif; color: #666; font-size: 0.85rem; min-width: 25px; text-align: right; }
 .toc-page::after { content: target-counter(attr(href), page); }
 .toc-category-header { column-span: all; font-family: 'Playfair Display', serif; font-size: 1.2rem; color: #e67e22; margin-top: 15px; margin-bottom: 5px; font-weight: bold; border-bottom: 1px solid #eee; }
+
+/* Recipe Layout */
 .recipe-card { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px dashed #ccc; padding-top: 10px; page-break-after: always; }
 h1 { font-family: 'Playfair Display', serif; font-size: 2.0rem; color: #2c3e50; text-align: center; margin-bottom: 5px; margin-top: 0; }
 .meta-info-container { text-align: center; margin-bottom: 15px; }
@@ -336,6 +350,7 @@ def process_cookbook_thread(job_id, zip_path, user_name, job_dir):
         JOBS[job_id]['message'] = 'Sorting and layout...'
         JOBS[job_id]['progress'] = 75
         
+        # Sort is crucial for groupby to work later
         def recipe_sorter(r):
             cat = r['category']
             name = r['name']
@@ -380,20 +395,25 @@ def process_cookbook_thread(job_id, zip_path, user_name, job_dir):
             os.remove(zip_path)
 
 def generate_full_html(recipes, user_name):
+    # 1. Cover Page
     def get_cover():
         year = datetime.datetime.now().year
         return f"""<div class="cover-page"><div class="cover-subtitle">My Personal</div><div class="cover-title">Recipe<br>Collection</div><div class="cover-icon">♨</div><div class="cover-author">from<br><strong>{html.escape(user_name)}</strong></div><div class="cover-year">{year}</div></div>"""
 
+    # 2. Main Global TOC
     def get_toc():
         list_items = ""
         last_cat = None
+        # We iterate here once for global TOC and setting anchors
         for recipe in recipes:
             current_cat = recipe.get('category', 'Others')
             if current_cat != last_cat:
                 list_items += f"""<li class="toc-category-header">{html.escape(current_cat)}</li>"""
                 last_cat = current_cat
+            
             anchor_id = f"recipe_{hash(recipe['name'])}"
             recipe['anchor_id'] = anchor_id
+            
             list_items += f"""<li class="toc-item"><a href="#{anchor_id}"><span>{html.escape(recipe["name"])}</span><span class="toc-dots"></span><span class="toc-page" href="#{anchor_id}"></span></a></li>"""
         return f"""<div class="toc-container"><div class="toc-title">Table of Contents</div><ul class="toc-list">{list_items}</ul></div><div class="page-break"></div>"""
 
@@ -401,33 +421,52 @@ def generate_full_html(recipes, user_name):
     content.append(get_cover())
     content.append(get_toc())
     
-    last_cat = None
-    for recipe in recipes:
-        if recipe['category'] != last_cat:
-            content.append(f"""<div class="chapter-page"><div class="chapter-title">{html.escape(recipe['category'])}</div></div>""")
-            last_cat = recipe['category']
-            
-        img_html = ""
-        if recipe.get('image_path'):
-            abs_path = os.path.abspath(recipe['image_path'])
-            img_html = f'<img src="file://{abs_path}" class="sidebar-image">'
-
-        ing_html = "".join([f"<li>{html.escape(i)}</li>" for i in recipe['ingredients_list'] if i.strip()])
-        dir_html = ""
-        step_count = 1
-        for step in recipe['directions_list']:
-            if step.strip():
-                dir_html += f'<div class="step" data-step="{step_count}">{html.escape(step)}</div>'
-                step_count += 1
-                
-        meta = []
-        if recipe.get('prep_time'): meta.append(f"Prep: {recipe['prep_time']}")
-        if recipe.get('cook_time'): meta.append(f"Cook: {recipe['cook_time']}")
-        if recipe.get('servings'): meta.append(f"Serv.: {recipe['servings']}")
-        meta_html = " &nbsp;&bull;&nbsp; ".join(meta) if meta else "&nbsp;"
-        notes_html = f'<div class="notes"><strong>Note:</strong> {html.escape(recipe["notes"])}</div>' if recipe.get('notes') else ""
+    # 3. Recipes grouped by category
+    # recipes are already sorted by category in the thread function, so groupby works.
+    for category, group in groupby(recipes, key=lambda x: x['category']):
+        cat_recipes = list(group)
         
-        content.append(f"""<div class="recipe-card avoid-break" id="{recipe.get('anchor_id', '')}"><h1>{html.escape(recipe['name'])}</h1><div class="meta-info-container"><div class="meta-info">{meta_html}</div></div><table class="layout-table"><tr><td class="sidebar-cell">{img_html}<h3>Ingredients</h3><ul>{ing_html}</ul></td><td class="main-cell"><h3>Directions</h3>{dir_html}{notes_html}</td></tr></table></div>""")
+        # --- A. Chapter Page with Mini-TOC ---
+        mini_toc_html = ""
+        for r in cat_recipes:
+            mini_toc_html += f'<li class="chapter-toc-item">{html.escape(r["name"])}</li>'
+        
+        content.append(f"""
+        <div class="chapter-page">
+            <div class="chapter-content-wrapper">
+                <div class="chapter-title">{html.escape(category)}</div>
+                <ul class="chapter-toc">
+                    {mini_toc_html}
+                </ul>
+            </div>
+        </div>
+        """)
+        
+        # --- B. Recipe Cards ---
+        for recipe in cat_recipes:
+            img_html = ""
+            if recipe.get('image_path'):
+                abs_path = os.path.abspath(recipe['image_path'])
+                img_html = f'<img src="file://{abs_path}" class="sidebar-image">'
+
+            ing_html = "".join([f"<li>{html.escape(i)}</li>" for i in recipe['ingredients_list'] if i.strip()])
+            
+            dir_html = ""
+            step_count = 1
+            for step in recipe['directions_list']:
+                if step.strip():
+                    dir_html += f'<div class="step" data-step="{step_count}">{html.escape(step)}</div>'
+                    step_count += 1
+                    
+            meta = []
+            if recipe.get('prep_time'): meta.append(f"Prep: {recipe['prep_time']}")
+            if recipe.get('cook_time'): meta.append(f"Cook: {recipe['cook_time']}")
+            if recipe.get('servings'): meta.append(f"Serv.: {recipe['servings']}")
+            meta_html = " &nbsp;&bull;&nbsp; ".join(meta) if meta else "&nbsp;"
+            
+            notes_html = f'<div class="notes"><strong>Note:</strong> {html.escape(recipe["notes"])}</div>' if recipe.get('notes') else ""
+            
+            content.append(f"""<div class="recipe-card avoid-break" id="{recipe.get('anchor_id', '')}"><h1>{html.escape(recipe['name'])}</h1><div class="meta-info-container"><div class="meta-info">{meta_html}</div></div><table class="layout-table"><tr><td class="sidebar-cell">{img_html}<h3>Ingredients</h3><ul>{ing_html}</ul></td><td class="main-cell"><h3>Directions</h3>{dir_html}{notes_html}</td></tr></table></div>""")
     
     content.append(f'<div class="footer no-print">Compiled by {html.escape(user_name)}</div></div></body></html>')
     return "".join(content)
@@ -510,7 +549,5 @@ cleanup_thread = threading.Thread(target=cleanup_jobs, daemon=True)
 cleanup_thread.start()
 
 if __name__ == '__main__':
-    # Damit hört die App auf den Port, den Render ihr gibt
     port = int(os.environ.get("PORT", 5000)) 
     app.run(host='0.0.0.0', port=port)
-
